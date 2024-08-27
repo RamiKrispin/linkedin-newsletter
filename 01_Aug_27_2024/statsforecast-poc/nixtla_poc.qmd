@@ -1,0 +1,128 @@
+---
+title: "Nixtla Demo"
+format:
+  html:
+    code-fold: false
+jupyter: python3
+---
+
+## Load Libraries
+
+```{python}
+import pandas as pd
+import numpy as np
+import datetime
+
+import statsforecast as sf
+import statsforecast.models as sfm
+from utilsforecast.plotting import plot_series
+```
+
+
+## Load Data
+
+```{python}
+url = "https://raw.githubusercontent.com/LinkedInLearning/data-pipeline-automation-with-github-actions-4503382/main/csv/ciso_grid_py.csv"
+
+d = pd.read_csv(url)
+
+d.head()
+
+```
+
+
+```{python}
+d["ds"] = pd.to_datetime(d["period"])
+d = d[["ds", "subba", "value"]]
+start = datetime.datetime(2022, 8, 1, 0, 0, 0)
+end = datetime.datetime(2024, 8, 20, 23, 0, 0)
+
+
+subba = d["subba"].dropna().unique()
+ts = None
+
+for i in range(len(subba)):
+    s = subba[i]
+    id = i + 1
+    ts_temp = pd.DataFrame(np.arange(start = start, stop = end + datetime.timedelta(hours = 1), step = datetime.timedelta(hours = 1)).astype(datetime.datetime), columns=["ds"])
+    ts_temp["unique_id"] = id
+    ts_temp["subba"] = s
+    ts_temp = ts_temp.merge(d, on = ["ds", "subba"], how = "left")
+    ts_temp = ts_temp.sort_values("ds")
+    if ts_temp["value"].isnull().any():
+        r = ts_temp[ts_temp["value"].isnull()]
+        for n in r.index:
+            ts_temp.at[n, "value"] = (ts_temp.at[n - 1, "value"] + ts_temp.at[n - 24, "value"] + ts_temp.at[n - 24 * 7, "value"]) / 3 
+    ts_temp = ts_temp.rename(columns = {"value": "y"})
+
+    if ts is None:
+        ts = ts_temp
+    else:
+        ts =  pd.concat([ts, ts_temp])
+
+ts = ts[["ds", "unique_id", "y"]]
+ts.head()
+```
+
+
+
+```{python}
+plot_series(ts, engine = "plotly")
+```
+
+
+## Training Models
+
+```{python}
+test_length = 72
+
+train_end = end  - datetime.timedelta(hours = test_length)
+
+
+train = ts[ts["ds"] <= train_end]
+test = ts[ts["ds"] > train_end]
+
+plot_series(test, engine = "plotly")
+```
+
+
+```{python}
+auto_arima = sfm.AutoARIMA()
+
+s_naive = sfm.SeasonalNaive(season_length=24)
+
+theta =  sfm.DynamicOptimizedTheta(season_length= 24)
+
+mstl1 = sfm.MSTL(
+    season_length=[24, 24 * 7], 
+    trend_forecaster=sfm.AutoARIMA(),
+    alias="MSTL_ARIMA_trend"
+)
+
+mstl2 = sfm.MSTL(
+    season_length=[24, 24 * 7], 
+    trend_forecaster= sfm.HoltWinters(),
+    alias="MSTL_HW_trend" 
+)
+
+stats_models = [auto_arima, s_naive, theta, mstl1, mstl2]
+
+
+
+md = sf.StatsForecast( 
+    models=stats_models,
+    freq="h", 
+    fallback_model = sfm.AutoARIMA(),
+    n_jobs= -1,
+)
+
+```
+
+
+```{python}
+forecast_stats = md.forecast(df=train, h=72, level=[95])
+
+print(forecast_stats.head())
+
+md.plot(test, forecast_stats,engine = "plotly", level=[95])
+```
