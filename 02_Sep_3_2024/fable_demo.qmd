@@ -1,0 +1,212 @@
+---
+title: "Forecasting with the Fable Library"
+format:
+  html:
+    code-fold: false
+---
+
+Second week of the forecasting sequence, after we reviewed last week Nixtla's statsforecast Python library, this week we will review the fable R library.
+
+The Fable library provides a set of univariate and multivariate time series forecasting models, such as ARIMA, ETS, and time series linear regression models. It also provides tools to train, test, and evaluate the models and functions to visualize the outputs.
+
+The fable library goes side-by-side with the book of the week, Forecasting: Principles and Practice by Rob J. Hyndman and George Athanasopoulos. As mentioned above, the library is part of the tidy-verts ecosystem along with libraries such as tsibble, fabletools, and feasts. 
+
+## Forecasting the demand for electricity in California
+Here is a quick demo demonstrating how to train and forecast multiple forecasting models for multiple time series using the hourly demand for electricity in California. We will mainly focus on the core functionality of the library using some of the data visualization tools and forecasting models. I plan to create a more in-depth tutorial at some point in the future. All the code and Docker settings for VScode are available on the following repository. 
+
+We will start by loading the required libraries:
+
+```{r}
+library(fable)
+library(tsibble)
+library(feasts)
+library(dplyr)
+library(tidyr)
+library(lubridate)
+library(ggplot2)
+library(GGally)
+```
+
+
+Besides the tidy-verts library, we will use the dplyr, tidyr, and lubridate to process the data and time objects, and use the ggplot2 and GGally for visulize the data.
+
+## Data
+
+We will continue to use the hourly demand for electricity in California by providers. This includes the following four providers:
+
+- Pacific Gas and Electric
+- Southern California Edison
+- San Diego Gas and Electric
+- Valley Electric Association
+
+The data source is the EIA website, and a curated dataset is available in my workshop from the useR!2024 workshop - Deploy and Monitor ML Pipelines with Open Source and Free Applications. We will use the last two years for the following demonstration:
+
+```{r}
+url <- "https://raw.githubusercontent.com/RamiKrispin/useR2024-pipeline-workshop/main/data/data.csv"
+
+data <- read.csv(url)
+
+head(data)
+```
+
+The fable library follows the tidyvers workflow, and it uses the tsibble object as input. Let's reformat the input object by reformating the series timestamp and dropping unused columns:
+
+```{r}
+start <- as.POSIXct("2022/8/1 0:00:00")
+end <- as.POSIXct("2024/8/20 23:00:00")
+
+data$time_temp <- ifelse(nchar(data$period) == 10, paste(data$period, "00:00:00", sep = " "), data$period)
+data$time <- as.POSIXct(data$time_temp)
+
+
+ts <- data |>
+    dplyr::select(time, subba, y = value) |>
+    dplyr::filter(
+        time >= start & time <= end
+    ) |>
+    dplyr::arrange(subba, time) |>
+    as_tsibble(index = time, key = subba)
+```
+
+The object is now ready to use:
+
+```{r}
+head(ts)
+```
+
+**Note:** We define the object key as the electricity provider and the time column as the series index. The tsibble object uses the key to set the hierarchy of the series.
+
+
+We will use the autoplot function to visualize the series:
+```{r}
+ts |>
+    autoplot() +
+    labs(
+        y = "MWh", x = "Time",
+        title = "California Hourly Demand for Electricity by Sub Provider"
+    )
+```
+
+
+The fable library provides a set of visualization functions for time series analysis. This includes functions for seasonal and correlation plots, as well as decomposition methods. Let's review a few of those functions. Starting with the gg_season function that provides a seasonal plot:
+
+
+
+```{r}
+ts |>
+    gg_season(y, period = "day") +
+    theme(legend.position = "none") +
+    labs(y = "MWh", x = "Hour", title = "Hourly Demand for Electricity in California")
+
+```
+
+This view provides an hourly view of the series. You can modify, when applicable, the seasonal type using the period argument. In addition, you can filter the input object and check the seasonal patterns during a specific time window. For example, the last 90 days:
+
+```{r}
+ts |>
+    dplyr::filter(time > max(ts$time) - 60 * 60 * 24 * 30) |>
+    gg_season(y, period = "day") +
+    theme(legend.position = "none") +
+    labs(
+        y = "MWh", x = "Hour",
+        title = "Hourly Demand for Electricity in California"
+    )
+```
+
+Another nice visualization function is the ggpairs from GGally library that visualize the cross-correlation between the four series:
+```{r}
+ts |>
+    pivot_wider(values_from = y, names_from = subba) |>
+    ggpairs(columns = 2:5)
+```
+
+The last visualization function we will review is the lag function, which provides a visual representative of the relationship between the series and its lags (similar to the ACF):
+
+```{r}
+ts |>
+    dplyr::filter(subba == "PGAE") |>
+    gg_lag(y,
+        lags = c(1:5, 24, 48, 168),
+        geom = "point"
+    ) +
+    labs(x = "lag(y, k)")
+
+```
+
+
+
+
+## Modeling
+
+We will keep it simple, leaving the last 72 hours as a testing partition and training the models with the rest of the data. The library has a cross-validation (i.e., backtesting) function, but this is outside the scope of this review.
+
+```{r}
+h <- 72
+
+train <- ts |> dplyr::filter(time <= max(time) - hours(h))
+
+test <- ts |> dplyr::filter(time > max(time) - hours(h))
+```
+
+Let's visualize the testing partition:
+
+```{r}
+test |>
+    autoplot() +
+    labs(
+        y = "MWh", x = "Time",
+        title = "Testing Set"
+    )
+```
+
+
+```{r}
+md <- train |>
+    model(
+        ets = ETS(y),
+        arima = ARIMA(y),
+        lm1 = TSLM(y ~ trend() + season()),
+        lm2 = TSLM(y ~ trend() + fourier(period = 24, K = 12)),
+        lm3 = TSLM(y ~ trend() + fourier(period = 24, K = 3)),
+        snaive1 = SNAIVE(y),
+        snaive2 = SNAIVE(y ~ drift())
+    )
+```
+
+Let's review the train models object:
+
+```{r}
+md
+```
+
+
+Once we train the models, we can go ahead and create a forecast:
+
+```{r}
+fc <- md |>
+    forecast(h = h)
+
+```
+
+The output object provides the point estimate and its distribution:
+```{r}
+fc
+```
+
+```{r}
+fc |>
+    autoplot(test)
+```
+
+Last but not least, let's evaluate the forecast performance on the testing partitions using basic dplyr functions:
+```{r}
+fc |>
+    dplyr::left_join(test |> dplyr::select(time, subba, actual = y), by = c("time", "subba")) |>
+    as.data.frame() |>
+    dplyr::group_by(subba, .model) |>
+    dplyr::summarise(
+        mape = mean(abs(actual - .mean) / actual),
+        rmse = (mean((actual - .mean)^2))^0.5
+    ) |>
+    dplyr::arrange(subba, mape)
+```
