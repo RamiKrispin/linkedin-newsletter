@@ -1,6 +1,6 @@
 # Rami's Data Newsletter 
 
-WIP...
+This repository provides the newsletter supporting materials.
 
 
 <br>
@@ -10,3 +10,8 @@ WIP...
 </figure>
 
 <br/>
+
+The newsletter is available on [LinkedIn](https://www.linkedin.com/newsletters/7230119265956216833/).
+
+- Edition 1 - [Introduction to the statsforecast library](https://github.com/RamiKrispin/linkedin-newsletter/tree/main/01_Aug_27_2024/statsforecast-poc)
+- Edition 2 - [Introduction to the fable library](https://github.com/RamiKrispin/linkedin-newsletter/blob/main/02_Sep_3_2024/fable_demo.qmd)
